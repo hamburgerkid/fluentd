@@ -213,7 +213,7 @@ class TailInputTest < Test::Unit::TestCase
 
   EX_CONFIG = %[
     tag tail
-    path test/plugin/*/%Y/%m/%Y%m%d-%H%M%S.log,test/plugin/data/log/**/*.log
+    path test/plugin/*/%Y/%m/%Y%m%d-%H%M%S.log,test/plugin/data/**/???.log,test/plugin/data/???/*.log
     format none
     pos_file #{TMP_DIR}/tail.pos
     read_from_head true

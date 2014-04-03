@@ -102,7 +102,7 @@ module Fluent
       paths = []
       @paths.each { |path|
         path = date.strftime(path)
-        if path.include?('*')
+        if path =~ /\*|\?/
           paths += Dir.glob(path)
         else
           # When file is not created yet, Dir.glob returns an empty array. So just add when path is static.
