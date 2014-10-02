@@ -1,8 +1,6 @@
 #
 # Fluentd
 #
-# Copyright (C) 2011 FURUHASHI Sadayuki
-#
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
 #    You may obtain a copy of the License at
@@ -17,27 +15,12 @@
 #
 
 require 'optparse'
-require 'fluent/log'
-require 'fluent/env'
-require 'fluent/version'
+require 'fluent/supervisor'
 
 op = OptionParser.new
 op.version = Fluent::VERSION
 
-# default values
-opts = {
-  :config_path => Fluent::DEFAULT_CONFIG_PATH,
-  :plugin_dirs => [Fluent::DEFAULT_PLUGIN_DIR],
-  :log_level => Fluent::Log::LEVEL_INFO,
-  :log_path => nil,
-  :daemonize => false,
-  :libs => [],
-  :setup_path => nil,
-  :chuser => nil,
-  :chgroup => nil,
-  :suppress_interval => 0,
-  :suppress_repeated_stacktrace => false,
-}
+opts = Fluent::Supervisor.default_options
 
 op.on('-s', "--setup [DIR=#{File.dirname(Fluent::DEFAULT_CONFIG_PATH)}]", "install sample configuration file to the directory") {|s|
   opts[:setup_path] = s || File.dirname(Fluent::DEFAULT_CONFIG_PATH)
@@ -89,6 +72,18 @@ op.on('--emit-error-log-interval SECONDS', "suppress interval seconds of emit er
 
 op.on('--suppress-repeated-stacktrace', "suppress repeated stacktrace", TrueClass) {|b|
   opts[:suppress_repeated_stacktrace] = b
+}
+
+op.on('--without-source', "invoke a fluentd without input plugins", TrueClass) {|b|
+  opts[:without_source] = b
+}
+
+op.on('--use-v1-config', "Use v1 configuration format (default)", TrueClass) {|b|
+  opts[:use_v1_config] = b
+}
+
+op.on('--use-v0-config', "Use v0 configuration format", TrueClass) {|b|
+  opts[:use_v1_config] = !b
 }
 
 op.on('-v', '--verbose', "increase verbose level (-v: debug, -vv: trace)", TrueClass) {|b|
@@ -164,6 +159,4 @@ if setup_path = opts[:setup_path]
   exit 0
 end
 
-require 'fluent/supervisor'
 Fluent::Supervisor.new(opts).start
-

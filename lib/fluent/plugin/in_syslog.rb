@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,13 +13,12 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class SyslogInput < Input
     Plugin.register_input('syslog', self)
 
     SYSLOG_REGEXP = /^\<([0-9]+)\>(.*)/
-    SYSLOG_ALL_REGEXP = /^\<(?<pri>[0-9]+)\>(?<time>[^ ]* {1,2}[^ ]* [^ ]*) (?<host>[^ ]*) (?<ident>[a-zA-Z0-9_\/\.\-]*)(?:\[(?<pid>[0-9]+)\])?[^\:]*\: *(?<message>.*)$/
-    TIME_FORMAT = "%b %d %H:%M:%S"
 
     FACILITY_MAP = {
       0   => 'kern',
@@ -80,6 +77,9 @@ module Fluent
         raise ConfigError, "syslog input protocol type should be 'tcp' or 'udp'"
       end
     end
+    config_param :include_source_host, :bool, :default => false
+    config_param :source_host_key, :string, :default => 'source_host'.freeze
+    config_param :blocking_timeout, :time, :default => 0.5
 
     def configure(conf)
       super
@@ -88,17 +88,19 @@ module Fluent
       if parser.configure(conf, false)
         @parser = parser
       else
-        @parser = nil
-        @time_parser = TextParser::TimeParser.new(TIME_FORMAT)
+        conf['with_priority'] = true
+        @parser = TextParser::SyslogParser.new
+        @parser.configure(conf)
+        @use_default = true
       end
     end
 
     def start
-      if @parser
-        callback = method(:receive_data_parser)
-      else
-        callback = method(:receive_data)
-      end
+      callback = if @use_default
+                   method(:receive_data)
+                 else
+                   method(:receive_data_parser)
+                 end
 
       @loop = Coolio::Loop.new
       @handler = listen(callback)
@@ -115,66 +117,50 @@ module Fluent
     end
 
     def run
-      @loop.run
+      @loop.run(@blocking_timeout)
     rescue
       log.error "unexpected error", :error=>$!.to_s
       log.error_backtrace
     end
 
     protected
-    def receive_data_parser(data)
+    def receive_data_parser(data, addr)
       m = SYSLOG_REGEXP.match(data)
       unless m
-        log.debug "invalid syslog message: #{data.dump}"
+        log.warn "invalid syslog message: #{data.dump}"
         return
       end
       pri = m[1].to_i
       text = m[2]
 
-      time, record = @parser.parse(text)
-      unless time && record
-        log.warn "pattern not match: #{text.inspect}"
-        return
-      end
+      @parser.parse(text) { |time, record|
+        unless time && record
+          log.warn "pattern not match: #{text.inspect}"
+          return
+        end
 
-      emit(pri, time, record)
-
-    rescue
-      log.warn data.dump, :error=>$!.to_s
-      log.debug_backtrace
+        record[@source_host_key] = addr[2] if @include_source_host
+        emit(pri, time, record)
+      }
+    rescue => e
+      log.error data.dump, :error => e.to_s
+      log.error_backtrace
     end
 
-    def receive_data(data)
-      m = SYSLOG_ALL_REGEXP.match(data)
-      unless m
-        log.debug "invalid syslog message", :data=>data
-        return
-      end
-
-      pri = nil
-      time = nil
-      record = {}
-
-      m.names.each {|name|
-        if value = m[name]
-          case name
-          when "pri"
-            pri = value.to_i
-          when "time"
-            time = @time_parser.parse(value.gsub(/ +/, ' '))
-          else
-            record[name] = value
-          end
+    def receive_data(data, addr)
+      @parser.call(data) { |time, record|
+        unless time && record
+          log.warn "invalid syslog message", :data => data
+          return
         end
+
+        pri = record.delete('pri')
+        record[@source_host_key] = addr[2] if @include_source_host
+        emit(pri, time, record)
       }
-
-      time ||= Engine.now
-
-      emit(pri, time, record)
-
-    rescue
-      log.warn data.dump, :error=>$!.to_s
-      log.debug_backtrace
+    rescue => e
+      log.error data.dump, :error => e.to_s
+      log.error_backtrace
     end
 
     private
@@ -184,9 +170,10 @@ module Fluent
       if @protocol_type == :udp
         @usock = SocketUtil.create_udp_socket(@bind)
         @usock.bind(@bind, @port)
-        UdpHandler.new(@usock, callback)
+        SocketUtil::UdpHandler.new(@usock, log, 2048, callback)
       else
-        Coolio::TCPServer.new(@bind, @port, TcpHandler, log, callback)
+        # syslog family add "\n" to each message and this seems only way to split messages in tcp stream
+        Coolio::TCPServer.new(@bind, @port, SocketUtil::TcpHandler, log, "\n", callback)
       end
     end
 
@@ -196,64 +183,9 @@ module Fluent
 
       tag = "#{@tag}.#{facility}.#{priority}"
 
-      Engine.emit(tag, time, record)
+      router.emit(tag, time, record)
     rescue => e
       log.error "syslog failed to emit", :error => e.to_s, :error_class => e.class.to_s, :tag => tag, :record => Yajl.dump(record)
-    end
-
-    class UdpHandler < Coolio::IO
-      def initialize(io, callback)
-        super(io)
-        @io = io
-        @callback = callback
-      end
-
-      def on_readable
-        msg, addr = @io.recvfrom_nonblock(2048)
-        #host = addr[3]
-        #port = addr[1]
-        #@callback.call(host, port, msg)
-        @callback.call(msg)
-      rescue
-        # TODO log?
-      end
-    end
-
-    class TcpHandler < Coolio::Socket
-      def initialize(io, log, on_message)
-        super(io)
-        if io.is_a?(TCPSocket)
-          opt = [1, @timeout.to_i].pack('I!I!')  # { int l_onoff; int l_linger; }
-          io.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, opt)
-        end
-        @on_message = on_message
-        @log = log
-        @log.trace { "accepted fluent socket object_id=#{self.object_id}" }
-        @buffer = "".force_encoding('ASCII-8BIT')
-      end
-
-      def on_connect
-      end
-
-      def on_read(data)
-        @buffer << data
-        pos = 0
-
-        # syslog family add "\n" to each message and this seems only way to split messages in tcp stream
-        while i = @buffer.index("\n", pos)
-          msg = @buffer[pos..i]
-          @on_message.call(msg)
-          pos = i + 1
-        end
-        @buffer.slice!(0, pos) if pos > 0
-      rescue => e
-        @log.error "syslog error", :error => e, :error_class => e.class
-        close
-      end
-
-      def on_close
-        @log.trace { "closed fluent socket object_id=#{self.object_id}" }
-      end
     end
   end
 end

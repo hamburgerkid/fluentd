@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -42,6 +40,18 @@ module Fluent
     LEVEL_FATAL = 5
 
     LEVEL_TEXT = %w(trace debug info warn error fatal)
+
+    def self.str_to_level(log_level_str)
+      case log_level_str.downcase
+      when "trace" then LEVEL_TRACE
+      when "debug" then LEVEL_DEBUG
+      when "info"  then LEVEL_INFO
+      when "warn"  then LEVEL_WARN
+      when "error" then LEVEL_ERROR
+      when "fatal" then LEVEL_FATAL
+      else raise "Unknown log level: level = #{log_level_str}"
+      end
+    end
 
     def initialize(out=STDERR, level=LEVEL_TRACE, opts={})
       @out = out
@@ -313,15 +323,7 @@ module Fluent
     end
 
     def level=(log_level_str)
-      @level = case log_level_str.downcase
-               when "trace" then LEVEL_TRACE
-               when "debug" then LEVEL_DEBUG
-               when "info"  then LEVEL_INFO
-               when "warn"  then LEVEL_WARN
-               when "error" then LEVEL_ERROR
-               when "fatal" then LEVEL_FATAL
-               else raise "Unknown log level: level = #{log_level_str}"
-               end
+      @level = Log.str_to_level(log_level_str)
     end
 
     alias orig_enable_color enable_color
@@ -334,7 +336,7 @@ module Fluent
     extend Forwardable
     def_delegators '@logger', :enable_color?, :enable_debug, :enable_event,
       :disable_events, :tag, :tag=, :time_format, :time_format=,
-      :event, :caller_line, :puts, :write, :flush
+      :event, :caller_line, :puts, :write, :flush, :out, :out=
   end
 
 
@@ -357,7 +359,9 @@ module Fluent
       super
 
       if @log_level
-        @log = PluginLogger.new($log)
+        unless @log.is_a?(PluginLogger)
+          @log = PluginLogger.new($log)
+        end
         @log.level = @log_level
       end
     end

@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class ExecInput < Input
     Plugin.register_input('exec', self)
@@ -145,7 +144,7 @@ module Fluent
         time = Engine.now
       end
 
-      Engine.emit(tag, time, record)
+      router.emit(tag, time, record)
     rescue => e
       log.error "exec failed to emit", :error => e.to_s, :error_class => e.class.to_s, :tag => tag, :record => Yajl.dump(record)
     end

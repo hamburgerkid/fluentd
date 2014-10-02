@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   module Test
     class TestDriver
@@ -23,23 +22,28 @@ module Fluent
       def initialize(klass, &block)
         if klass.is_a?(Class)
           if block
-            klass = klass.dup
+            # Create new class for test w/ overwritten methods
+            #   klass.dup is worse because its ancestors does NOT include original class name
+            klass = Class.new(klass)
             klass.module_eval(&block)
           end
           @instance = klass.new
         else
           @instance = klass
         end
+        @instance.router = Engine.root_agent.event_router
+        @instance.log = TestLogger.new
+
         @config = Config.new
       end
 
       attr_reader :instance, :config
 
-      def configure(str)
+      def configure(str, use_v1 = false)
         if str.is_a?(Fluent::Config::Element)
           @config = str
         else
-          @config = Config.parse(str, "(test)")
+          @config = Config.parse(str, "(test)", "(test_dir)", use_v1)
         end
         @instance.configure(@config)
         self
@@ -54,6 +58,45 @@ module Fluent
         ensure
           @instance.shutdown
         end
+      end
+    end
+
+    class DummyLogDevice
+      attr_reader :logs
+
+      def initialize
+        @logs = []
+      end
+
+      def tty?
+        false
+      end
+
+      def puts(*args)
+        args.each{ |arg| write(arg + "\n") }
+      end
+
+      def write(message)
+        @logs.push message
+      end
+
+      def flush
+        true
+      end
+
+      def close
+        true
+      end
+    end
+
+    class TestLogger < Fluent::PluginLogger
+      def initialize
+        @logdev = DummyLogDevice.new
+        super(Fluent::Log.new(@logdev))
+      end
+
+      def logs
+        @logdev.logs
       end
     end
   end

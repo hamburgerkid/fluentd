@@ -1,10 +1,10 @@
 Fluentd: Open-Source Data Collector
 ===================================
 
-[<img src="https://travis-ci.org/fluent/fluentd.png" />](https://travis-ci.org/fluent/fluentd) [<img src="https://codeclimate.com/github/fluent/fluentd.png " />](https://codeclimate.com/github/fluent/fluentd)
+[<img src="https://travis-ci.org/fluent/fluentd.svg" />](https://travis-ci.org/fluent/fluentd) [![Code Climate](https://codeclimate.com/github/fluent/fluentd/badges/gpa.svg)](https://codeclimate.com/github/fluent/fluentd)
 
 
-[Fluentd](http://fluentd.org/) collects events from various data sources and writes them to files, database or other types of storages. You can simplify your data stream, and have robust data collection mechanism instantly:
+[Fluentd](http://fluentd.org/) collects events from various data sources and writes them to files, RDBMS, NoSQL, IaaS, SaaS, Hadoop and so on. Fluentd helps you unify your logging infrastructure (Learn more about the [Unified Logging Layer](http://www.fluentd.org/blog/unified-logging-layer)).
 
 <p align="center">
 <img src="http://docs.fluentd.org/images/fluentd-architecture.png" width="500px"/>
@@ -20,13 +20,17 @@ An event consists of *tag*, *time* and *record*. Tag is a string separated with 
     $ fluentd -c conf/fluent.conf &
     $ echo '{"json":"message"}' | fluent-cat debug.test
 
+## Fluentd UI: Admin GUI
+
+[Fluentd UI](https://github.com/fluent/fluentd-ui) is a graphical user interface to start/stop/configure Fluentd.
+
 ## More Information
 
-- Web site:  http://fluentd.org/
-- Documents: http://docs.fluentd.org/
+- Website: http://fluentd.org/
+- Documentation: http://docs.fluentd.org/
 - Source repository: http://github.com/fluent
 - Discussion: http://groups.google.com/group/fluentd
-- News Letters: http://go.treasuredata.com/Fluentd_education
+- Newsletters: http://get.treasuredata.com/Fluentd_education
 - Author: Sadayuki Furuhashi
 - Copyright: (c) 2011 FURUHASHI Sadayuki
 - License: Apache License, Version 2.0

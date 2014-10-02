@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class MonitorAgentInput < Input
     Plugin.register_input('monitor_agent', self)
@@ -153,6 +152,36 @@ module Fluent
       end
     end
 
+    class ConfigMonitorServlet < MonitorServlet
+      def build_object(req, res)
+        {
+          'pid' => Process.pid,
+          'ppid' => Process.ppid
+        }.merge(@agent.fluentd_opts)
+      end
+    end
+
+    class LTSVConfigMonitorServlet < ConfigMonitorServlet
+      def process(req, res)
+        result = build_object(req, res)
+
+        row = []
+        JSON.parse(result.to_json).each_pair { |k, v|
+          row << "#{k}:#{v}"
+        }
+        text = row.join("\t")
+
+        [200, {'Content-Type'=>'text/plain'}, text]
+      end
+    end
+
+    class JSONConfigMonitorServlet < ConfigMonitorServlet
+      def process(req, res)
+        result = build_object(req, res)
+        render_json(result)
+      end
+    end
+
     def start
       log.debug "listening monitoring http server on http://#{@bind}:#{@port}/api/plugins"
       @srv = WEBrick::HTTPServer.new({
@@ -163,6 +192,8 @@ module Fluent
         })
       @srv.mount('/api/plugins', LTSVMonitorServlet, self)
       @srv.mount('/api/plugins.json', JSONMonitorServlet, self)
+      @srv.mount('/api/config', LTSVConfigMonitorServlet, self)
+      @srv.mount('/api/config.json', JSONConfigMonitorServlet, self)
       @thread = Thread.new {
         @srv.start
       }
@@ -185,7 +216,7 @@ module Fluent
       'output_plugin' => 'is_a?(::Fluent::Output)',
       'buffer_queue_length' => '@buffer.queue_size',
       'buffer_total_queued_size' => '@buffer.total_queued_chunk_size',
-      'retry_count' => '@error_history.size',
+      'retry_count' => '@num_errors',
       'config' => 'config',
     }
 
@@ -193,11 +224,17 @@ module Fluent
       array = []
 
       # get all input plugins
-      array.concat Engine.sources
+      array.concat Engine.root_agent.inputs
 
       # get all output plugins
-      Engine.matches.each {|m|
-        MonitorAgentInput.collect_children(m.output, array)
+      Engine.root_agent.outputs.each { |o|
+        MonitorAgentInput.collect_children(o, array)
+      }
+      Engine.root_agent.labels.each { |name, l|
+        # TODO: Add label name to outputs for identifing plugins
+        l.outputs.each { |o|
+          MonitorAgentInput.collect_children(o, array)
+        }
       }
 
       array
@@ -281,6 +318,19 @@ module Fluent
       end
 
       obj
+    end
+
+    def fluentd_opts
+      @fluentd_opts ||= get_fluentd_opts
+    end
+
+    def get_fluentd_opts
+      opts = {}
+      ObjectSpace.each_object(Fluent::Supervisor) { |obj|
+        opts.merge!(obj.options)
+        break
+      }
+      opts
     end
   end
 end

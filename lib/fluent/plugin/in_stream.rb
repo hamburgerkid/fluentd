@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,9 +13,12 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   # obsolete
   class StreamInput < Input
+    config_param :blocking_timeout, :time, :default => 0.5
+
     def initialize
       require 'socket'
       require 'yajl'
@@ -29,7 +30,6 @@ module Fluent
       @lsock = listen
       @loop.attach(@lsock)
       @thread = Thread.new(&method(:run))
-      @cached_unpacker = $use_msgpack_5 ? nil : MessagePack::Unpacker.new
     end
 
     def shutdown
@@ -43,7 +43,7 @@ module Fluent
     #end
 
     def run
-      @loop.run
+      @loop.run(@blocking_timeout)
     rescue
       log.error "unexpected error", :error=>$!.to_s
       log.error_backtrace
@@ -77,8 +77,8 @@ module Fluent
 
       if entries.class == String
         # PackedForward
-        es = MessagePackEventStream.new(entries, @cached_unpacker)
-        Engine.emit_stream(tag, es)
+        es = MessagePackEventStream.new(entries)
+        router.emit_stream(tag, es)
 
       elsif entries.class == Array
         # Forward
@@ -90,7 +90,7 @@ module Fluent
           time = (now ||= Engine.now) if time == 0
           es.add(time, record)
         }
-        Engine.emit_stream(tag, es)
+        router.emit_stream(tag, es)
 
       else
         # Message
@@ -99,7 +99,7 @@ module Fluent
 
         time = msg[1]
         time = Engine.now if time == 0
-        Engine.emit(tag, time, record)
+        router.emit(tag, time, record)
       end
     end
 
@@ -160,34 +160,6 @@ module Fluent
     end
   end
 
-
-  # obsolete
-  # ForwardInput is backward compatible with TcpInput
-  #class TcpInput < StreamInput
-  #  Plugin.register_input('tcp', self)
-  #
-  #  config_param :port, :integer, :default => DEFAULT_LISTEN_PORT
-  #  config_param :bind, :string, :default => '0.0.0.0'
-  #
-  #  def configure(conf)
-  #    super
-  #  end
-  #
-  #  def listen
-  #    log.debug "listening fluent socket on #{@bind}:#{@port}"
-  #    Coolio::TCPServer.new(@bind, @port, Handler, method(:on_message))
-  #  end
-  #end
-  class TcpInput < ForwardInput
-    Plugin.register_input('tcp', self)
-
-    def initialize
-      super
-      $log.warn "'tcp' input is obsoleted and will be removed soon. Use 'forward' instead."
-    end
-  end
-
-
   class UnixInput < StreamInput
     Plugin.register_input('unix', self)
 
@@ -211,4 +183,3 @@ module Fluent
     end
   end
 end
-

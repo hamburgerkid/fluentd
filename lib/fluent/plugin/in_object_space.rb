@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class ObjectSpaceInput < Input
     Plugin.register_input('object_space', self)
@@ -109,7 +108,7 @@ module Fluent
         record[c.name] = c.count
       }
 
-      Engine.emit(@tag, now, record)
+      router.emit(@tag, now, record)
     rescue => e
       log.error "object space failed to emit", :error => e.to_s, :error_class => e.class.to_s, :tag => @tag, :record => Yajl.dump(record)
     end

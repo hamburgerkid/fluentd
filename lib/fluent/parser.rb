@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,7 +13,10 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
+  require 'fluent/registry'
+
   class TextParser
     class TimeParser
       def initialize(time_format)
@@ -126,6 +127,10 @@ module Fluent
 
       config_param :time_format, :string, :default => nil
 
+      # SET false BEFORE CONFIGURE, to return nil when time not parsed
+      # 'configure()' may raise errors for unexpected configurations
+      attr_accessor :estimate_current_event
+
       def initialize(regexp, conf={})
         super()
         @regexp = regexp
@@ -134,6 +139,7 @@ module Fluent
         end
 
         @time_parser = TimeParser.new(@time_format)
+        @estimate_current_event = true
         @mutex = Mutex.new
       end
 
@@ -142,10 +148,19 @@ module Fluent
         @time_parser = TimeParser.new(@time_format)
       end
 
+      def patterns
+        {'format' => @regexp, 'time_format' => @time_format}
+      end
+
       def call(text)
         m = @regexp.match(text)
         unless m
-          return nil, nil
+          if block_given?
+            yield nil, nil
+            return
+          else
+            return nil, nil
+          end
         end
 
         time = nil
@@ -166,9 +181,15 @@ module Fluent
           end
         }
 
-        time ||= Engine.now
+        if @estimate_current_event
+          time ||= Engine.now
+        end
 
-        return time, record
+        if block_given?
+          yield time, record
+        else # keep backward compatibility. will be removed at v1
+          return time, record
+        end
       end
     end
 
@@ -177,6 +198,15 @@ module Fluent
 
       config_param :time_key, :string, :default => 'time'
       config_param :time_format, :string, :default => nil
+
+      # SET false BEFORE CONFIGURE, to return nil when time not parsed
+      # 'configure()' may raise errors for unexpected configurations
+      attr_accessor :estimate_current_event
+
+      def initialize
+        super
+        @estimate_current_event = true
+      end
 
       def configure(conf)
         super
@@ -197,12 +227,24 @@ module Fluent
             time = value.to_i
           end
         else
-          time = Engine.now
+          if @estimate_current_event
+            time = Engine.now
+          else
+            time = nil
+          end
         end
 
-        return time, record
+        if block_given?
+          yield time, record
+        else
+          return time, record
+        end
       rescue Yajl::ParseError
-        return nil, nil
+        if block_given?
+          yield nil, nil
+        else
+          return nil, nil
+        end
       end
     end
 
@@ -214,12 +256,19 @@ module Fluent
       config_param :time_key, :string, :default => nil
       config_param :time_format, :string, :default => nil
 
+      attr_accessor :estimate_current_event
+
+      def initialize
+        super
+        @estimate_current_event = true
+      end
+
       def configure(conf)
         super
 
         @keys = @keys.split(",")
 
-        if @time_key && !@keys.include?(@time_key)
+        if @time_key && !@keys.include?(@time_key) && @estimate_current_event
           raise ConfigError, "time_key (#{@time_key.inspect}) is not included in keys (#{@keys.inspect})"
         end
 
@@ -236,9 +285,19 @@ module Fluent
 
         if @time_key
           value = record.delete(@time_key)
-          time = @mutex.synchronize { @time_parser.parse(value) }
-        else
+          time = if value.nil?
+                   if @estimate_current_event
+                     Engine.now
+                   else
+                     nil
+                   end
+                 else
+                   @mutex.synchronize { @time_parser.parse(value) }
+                 end
+        elsif @estimate_current_event
           time = Engine.now
+        else
+          time = nil
         end
 
         convert_field_type!(record) if @type_converters
@@ -261,7 +320,11 @@ module Fluent
       config_param :delimiter, :string, :default => "\t"
 
       def call(text)
-        return values_map(text.split(@delimiter))
+        if block_given?
+          yield values_map(text.split(@delimiter))
+        else
+          return values_map(text.split(@delimiter))
+        end
       end
     end
 
@@ -285,7 +348,11 @@ module Fluent
           values.push(value)
         end
 
-        return values_map(values)
+        if block_given?
+          yield values_map(values)
+        else
+          return values_map(values)
+        end
       end
     end
 
@@ -296,7 +363,11 @@ module Fluent
       end
 
       def call(text)
-        return values_map(CSV.parse_line(text))
+        if block_given?
+          yield values_map(CSV.parse_line(text))
+        else
+          return values_map(CSV.parse_line(text))
+        end
       end
     end
 
@@ -305,10 +376,22 @@ module Fluent
 
       config_param :message_key, :string, :default => 'message'
 
+      attr_accessor :estimate_current_event
+
+      def initialize
+        super
+        @estimate_current_event = true
+      end
+
       def call(text)
         record = {}
         record[@message_key] = text
-        return Engine.now, record
+        time = @estimate_current_event ? Engine.now : nil
+        if block_given?
+          yield time, record
+        else
+          return time, record
+        end
       end
     end
 
@@ -316,16 +399,26 @@ module Fluent
       include Configurable
 
       REGEXP = /^(?<host>[^ ]*) [^ ]* (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^ ]*) +\S*)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$/
+      TIME_FORMAT = "%d/%b/%Y:%H:%M:%S %z"
 
       def initialize
-        @time_parser = TimeParser.new("%d/%b/%Y:%H:%M:%S %z")
+        @time_parser = TimeParser.new(TIME_FORMAT)
         @mutex = Mutex.new
+      end
+
+      def patterns
+        {'format' => REGEXP, 'time_format' => TIME_FORMAT}
       end
 
       def call(text)
         m = REGEXP.match(text)
         unless m
-          return nil, nil
+          if block_given?
+            yield nil, nil
+            return
+          else
+            return nil, nil
+          end
         end
 
         host = m['host']
@@ -363,7 +456,80 @@ module Fluent
           "agent" => agent,
         }
 
-        return time, record
+        if block_given?
+          yield time, record
+        else
+          return time, record
+        end
+      end
+    end
+
+    class SyslogParser
+      include Configurable
+
+      # From existence TextParser pattern
+      REGEXP = /^(?<time>[^ ]*\s*[^ ]* [^ ]*) (?<host>[^ ]*) (?<ident>[a-zA-Z0-9_\/\.\-]*)(?:\[(?<pid>[0-9]+)\])?(?:[^\:]*\:)? *(?<message>.*)$/
+      # From in_syslog default pattern
+      REGEXP_WITH_PRI = /^\<(?<pri>[0-9]+)\>(?<time>[^ ]* {1,2}[^ ]* [^ ]*) (?<host>[^ ]*) (?<ident>[a-zA-Z0-9_\/\.\-]*)(?:\[(?<pid>[0-9]+)\])?(?:[^\:]*\:)? *(?<message>.*)$/
+
+      config_param :time_format, :string, :default => "%b %d %H:%M:%S"
+      config_param :with_priority, :bool, :default => false
+
+      attr_accessor :estimate_current_event
+
+      def initialize
+        super
+        @estimate_current_event = true
+        @mutex = Mutex.new
+      end
+
+      def configure(conf)
+        super
+
+        @regexp = @with_priority ? REGEXP_WITH_PRI : REGEXP
+        @time_parser = TextParser::TimeParser.new(@time_format)
+      end
+
+      def patterns
+        {'format' => @regexp, 'time_format' => @time_format}
+      end
+
+      def call(text)
+        m = @regexp.match(text)
+        unless m
+          if block_given?
+            yield nil, nil
+            return
+          else
+            return nil, nil
+          end
+        end
+
+        time = nil
+        record = {}
+
+        m.names.each { |name|
+          if value = m[name]
+            case name
+            when "pri"
+              record['pri'] = value.to_i
+            when "time"
+              time = @mutex.synchronize { @time_parser.parse(value.gsub(/ +/, ' ')) }
+            else
+              record[name] = value
+            end
+          end
+        }
+
+        if @estimate_current_event
+          time ||= Engine.now
+        end
+
+        if block_given?
+          yield time, record
+        else
+          return time, record
+        end
       end
     end
 
@@ -390,16 +556,24 @@ module Fluent
 
         if @format_firstline
           check_format_regexp(@format_firstline, 'format_firstline')
-          @regex = Regexp.new(@format_firstline[1..-2])
+          @firstline_regex = Regexp.new(@format_firstline[1..-2])
         end
       end
 
-      def call(text)
-        @parser.call(text)
+      def call(text, &block)
+        if block
+          @parser.call(text, &block)
+        else
+          @parser.call(text)
+        end
+      end
+
+      def has_firstline?
+        !!@format_firstline
       end
 
       def firstline?(text)
-        @regex.match(text)
+        @firstline_regex.match(text)
       end
 
       private
@@ -444,10 +618,12 @@ module Fluent
       end
     end
 
-    TEMPLATE_FACTORIES = {
+    TEMPLATE_REGISTRY = Registry.new(:config_type, 'fluent/plugin/parser_')
+    {
       'apache' => Proc.new { RegexpParser.new(/^(?<host>[^ ]*) [^ ]* (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^ ]*) +\S*)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$/, {'time_format'=>"%d/%b/%Y:%H:%M:%S %z"}) },
+      'apache_error' => Proc.new { RegexpParser.new(/^\[[^ ]* (?<time>[^\]]*)\] \[(?<level>[^\]]*)\](?: \[pid (?<pid>[^\]]*)\])?( \[client (?<client>[^\]]*)\])? (?<message>.*)$/) },
       'apache2' => Proc.new { ApacheParser.new },
-      'syslog' => Proc.new { RegexpParser.new(/^(?<time>[^ ]*\s*[^ ]* [^ ]*) (?<host>[^ ]*) (?<ident>[a-zA-Z0-9_\/\.\-]*)(?:\[(?<pid>[0-9]+)\])?[^\:]*\: *(?<message>.*)$/, {'time_format'=>"%b %d %H:%M:%S"}) },
+      'syslog' => Proc.new { SyslogParser.new },
       'json' => Proc.new { JSONParser.new },
       'tsv' => Proc.new { TSVParser.new },
       'ltsv' => Proc.new { LabeledTSVParser.new },
@@ -455,6 +631,8 @@ module Fluent
       'nginx' => Proc.new { RegexpParser.new(/^(?<remote>[^ ]*) (?<host>[^ ]*) (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*) +\S*)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$/,  {'time_format'=>"%d/%b/%Y:%H:%M:%S %z"}) },
       'none' => Proc.new { NoneParser.new },
       'multiline' => Proc.new { MultilineParser.new },
+    }.each { |name, factory|
+      TEMPLATE_REGISTRY.register(name, factory)
     }
 
     def self.register_template(name, regexp_or_proc, time_format=nil)
@@ -465,14 +643,19 @@ module Fluent
         factory = regexp_or_proc
       end
 
-      TEMPLATE_FACTORIES[name] = factory
+      TEMPLATE_REGISTRY.register(name, factory)
     end
 
     def initialize
       @parser = nil
+      @estimate_current_event = nil
     end
 
     attr_reader :parser
+
+    # SET false BEFORE CONFIGURE, to return nil when time not parsed
+    # 'configure()' may raise errors for unexpected configurations
+    attr_accessor :estimate_current_event
 
     def configure(conf, required=true)
       format = conf['format']
@@ -497,14 +680,18 @@ module Fluent
         end
 
         @parser = RegexpParser.new(regexp, conf)
-
       else
         # built-in template
-        factory = TEMPLATE_FACTORIES[format]
-        unless factory
+        begin
+          factory = TEMPLATE_REGISTRY.lookup(format)
+        rescue ConfigError => e # keep same error message
           raise ConfigError, "Unknown format template '#{format}'"
         end
         @parser = factory.call
+      end
+
+      if ! @estimate_current_event.nil? && @parser.respond_to?(:'estimate_current_event=')
+        @parser.estimate_current_event = @estimate_current_event
       end
 
       if @parser.respond_to?(:configure)
@@ -514,8 +701,12 @@ module Fluent
       return true
     end
 
-    def parse(text)
-      return @parser.call(text)
+    def parse(text, &block)
+      if block
+        @parser.call(text, &block)
+      else # keep backward compatibility. Will be removed at v1
+        return @parser.call(text)
+      end
     end
   end
 end

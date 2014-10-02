@@ -3,20 +3,25 @@ language: ruby
 rvm:
   - 1.9.3
   - 2.0.0
-  - 2.1.0
-  - rbx
+  - 2.1
+  - ruby-head
+  - rbx-2
+
+os:
+  - linux
+  - osx
 
 branches:
   only:
     - master
-    - v11
+    - v0.10
 
 gemfile:
   - Gemfile
-  - Gemfile.cool.io.1.1.1
 
 script: bundle exec rake
 
 matrix:
   allow_failures:
-    - rvm: rbx
+    - rvm: ruby-head
+    - rvm: rbx-2

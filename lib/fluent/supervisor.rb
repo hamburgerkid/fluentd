@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,8 +13,28 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
+require 'fluent/load'
+require 'etc'
+
 module Fluent
   class Supervisor
+    def self.get_etc_passwd(user)
+      if user.to_i.to_s == user
+        Etc.getpwuid(user.to_i)
+      else
+        Etc.getpwnam(user)
+      end
+    end
+
+    def self.get_etc_group(group)
+      if group.to_i.to_s == group
+        Etc.getgrgid(group.to_i)
+      else
+        Etc.getgrnam(group)
+      end
+    end
+
     class LoggerInitializer
       def initialize(path, level, chuser, chgroup, opts)
         @path = path
@@ -30,8 +48,8 @@ module Fluent
         if @path && @path != "-"
           @io = File.open(@path, "a")
           if @chuser || @chgroup
-            chuid = @chuser ? `id -u #{@chuser}`.to_i : nil
-            chgid = @chgroup ? `id -g #{@chgroup}`.to_i : nil
+            chuid = @chuser ? Supervisor.get_etc_passwd(@chuser).uid : nil
+            chgid = @chgroup ? Supervisor.get_etc_group(@chgroup).gid : nil
             File.chown(chuid, chgid, @path)
           end
         else
@@ -39,7 +57,6 @@ module Fluent
         end
 
         $log = Fluent::Log.new(@io, @level, @opts)
-
         $log.enable_color(false) if @path
         $log.enable_debug if @level <= Fluent::Log::LEVEL_DEBUG
       end
@@ -56,19 +73,42 @@ module Fluent
       end
     end
 
+    def self.default_options
+      {
+        :config_path => Fluent::DEFAULT_CONFIG_PATH,
+        :plugin_dirs => [Fluent::DEFAULT_PLUGIN_DIR],
+        :log_level => Fluent::Log::LEVEL_INFO,
+        :log_path => nil,
+        :daemonize => nil,
+        :libs => [],
+        :setup_path => nil,
+        :chuser => nil,
+        :chgroup => nil,
+        :suppress_interval => 0,
+        :suppress_repeated_stacktrace => false,
+        :without_source => false,
+        :use_v1_config => true,
+      }
+    end
+
     def initialize(opt)
-      @config_path = opt[:config_path]
-      @log_path = opt[:log_path]
-      @log_level = opt[:log_level]
       @daemonize = opt[:daemonize]
-      @chgroup = opt[:chgroup]
-      @chuser = opt[:chuser]
+      @config_path = opt[:config_path]
+      @inline_config = opt[:inline_config]
+      @use_v1_config = opt[:use_v1_config]
+      @log_path = opt[:log_path]
+      @dry_run = opt[:dry_run]
       @libs = opt[:libs]
       @plugin_dirs = opt[:plugin_dirs]
-      @inline_config = opt[:inline_config]
+      @chgroup = opt[:chgroup]
+      @chuser = opt[:chuser]
+
+      apply_system_config(opt)
+
+      @log_level = opt[:log_level]
       @suppress_interval = opt[:suppress_interval]
-      @dry_run = opt[:dry_run]
       @suppress_config_dump = opt[:suppress_config_dump]
+      @without_source = opt[:without_source]
 
       log_opts = {:suppress_repeated_stacktrace => opt[:suppress_repeated_stacktrace]}
       @log = LoggerInitializer.new(@log_path, @log_level, @chuser, @chgroup, log_opts)
@@ -77,7 +117,6 @@ module Fluent
     end
 
     def start
-      require 'fluent/load'
       @log.init
 
       dry_run if @dry_run
@@ -98,9 +137,20 @@ module Fluent
       end
     end
 
+    def options
+      {
+        'config_path' => @config_path,
+        'pid_file' => @daemonize,
+        'plugin_dirs' => @plugin_dirs,
+        'log_path' => @log_path
+      }
+    end
+
     private
 
     def dry_run
+      $log.info "starting fluentd-#{Fluent::VERSION} as dry run mode"
+
       read_config
       change_privilege
       init_engine
@@ -108,7 +158,7 @@ module Fluent
       run_configure
       exit 0
     rescue => e
-      $log.error "Dry run failed: #{e}"
+      $log.error "dry run failed: #{e}"
       exit 1
     end
 
@@ -270,7 +320,7 @@ module Fluent
     end
 
     def read_config
-      $log.info "reading config file", :path=>@config_path
+      $log.info "reading config file", :path => @config_path
       @config_fname = File.basename(@config_path)
       @config_basedir = File.dirname(@config_path)
       @config_data = File.read(@config_path)
@@ -281,49 +331,75 @@ module Fluent
       end
     end
 
+    class SystemConfig
+      include Configurable
+
+      config_param :log_level, :default => nil do |level|
+        Log.str_to_level(level)
+      end
+      config_param :suppress_repeated_stacktrace, :bool, :default => nil
+      config_param :emit_error_log_interval, :time, :default => nil
+      config_param :suppress_config_dump, :bool, :default => nil
+      config_param :without_source, :bool, :default => nil
+
+      def initialize(conf)
+        super()
+        configure(conf)
+      end
+
+      def to_opt
+        opt = {}
+        opt[:log_level] = @log_level unless @log_level.nil?
+        opt[:suppress_interval] = @emit_error_log_interval unless @emit_error_log_interval.nil?
+        opt[:suppress_config_dump] = @suppress_config_dump unless @suppress_config_dump.nil?
+        opt[:suppress_repeated_stacktrace] = @suppress_repeated_stacktrace unless @suppress_repeated_stacktrace.nil?
+        opt[:without_source] = @without_source unless @without_source.nil?
+        opt
+      end
+    end
+
+    # TODO: this method should be moved to SystemConfig class method
+    def apply_system_config(opt)
+      # Create NULL file to avoid $log uninitialized problem before call @log.init
+      file = File.open(File::NULL)
+      $log = Fluent::Log.new(file, Log::LEVEL_INFO)
+      read_config
+      systems = Fluent::Config.parse(@config_data, @config_fname, @config_basedir, @use_v1_config).elements.select { |e|
+        e.name == 'system'
+      }
+      return if systems.empty?
+      raise ConfigError, "<system> is duplicated. <system> should be only one" if systems.size > 1
+
+      opt.merge!(SystemConfig.new(systems.first).to_opt)
+    ensure
+      file.close
+    end
+
     def run_configure
-      Fluent::Engine.parse_config(@config_data, @config_fname, @config_basedir)
+      conf = Fluent::Config.parse(@config_data, @config_fname, @config_basedir, @use_v1_config)
+      Fluent::Engine.run_configure(conf)
     end
 
     def change_privilege
       if @chgroup
-        chgid = @chgroup.to_i
-        if chgid.to_s != @chgroup
-          chgid = `id -g #{@chgroup}`.to_i
-          if $?.to_i != 0
-            exit 1
-          end
-        end
-        Process::GID.change_privilege(chgid)
+        etc_group = Supervisor.get_etc_group(@chgroup)
+        Process::GID.change_privilege(etc_group.gid)
       end
 
       if @chuser
-        chuid = @chuser.to_i
-        if chuid.to_s != @chuser
-          chuid = `id -u #{@chuser}`.to_i
-          if $?.to_i != 0
-            exit 1
-          end
-        end
-
-        user_groups = `id -G #{@chuser}`.split.map(&:to_i)
-        if $?.to_i != 0
-          exit 1
-        end
+        etc_pw = Supervisor.get_etc_passwd(@chuser)
+        user_groups = [etc_pw.gid]
+        Etc.setgrent
+        Etc.group { |gr| user_groups << gr.gid if gr.mem.include?(etc_pw.name) } # emulate 'id -G'
 
         Process.groups = Process.groups | user_groups
-        Process::UID.change_privilege(chuid)
+        Process::UID.change_privilege(etc_pw.uid)
       end
     end
 
     def init_engine
-      require 'fluent/load'
-      Fluent::Engine.init
-      if @suppress_interval
-        Fluent::Engine.suppress_interval(@suppress_interval)
-      end
-
-      Fluent::Engine.suppress_config_dump = @suppress_config_dump
+      init_opts = {:suppress_interval => @suppress_interval, :suppress_config_dump => @suppress_config_dump, :without_source => @without_source}
+      Fluent::Engine.init(init_opts)
 
       @libs.each {|lib|
         require lib
@@ -387,4 +463,3 @@ module Fluent
     end
   end
 end
-

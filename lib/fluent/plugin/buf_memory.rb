@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class MemoryBufferChunk < BufferChunk
     def initialize(key, data='')
@@ -22,7 +21,7 @@ module Fluent
       @data.force_encoding('ASCII-8BIT')
       now = Time.now.utc
       u1 = ((now.to_i*1000*1000+now.usec) << 12 | rand(0xfff))
-      @unique_id = [u1 >> 32, u1 & u1 & 0xffffffff, rand(0xffffffff), rand(0xffffffff)].pack('NNNN')
+      @unique_id = [u1 >> 32, u1 & 0xffffffff, rand(0xffffffff), rand(0xffffffff)].pack('NNNN')
       super(key)
     end
 
@@ -78,6 +77,11 @@ module Fluent
 
     def configure(conf)
       super
+
+      unless @flush_at_shutdown
+        $log.warn "When flush_at_shutdown is false, buf_memory discards buffered chunks at shutdown."
+        $log.warn "Please confirm 'flush_at_shutdown false' configuration is correct or not."
+      end
     end
 
     def before_shutdown(out)

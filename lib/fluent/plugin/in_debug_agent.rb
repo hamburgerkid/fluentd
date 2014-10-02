@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class DebugAgentInput < Input
     Plugin.register_input('debug_agent', self)
@@ -26,7 +25,7 @@ module Fluent
 
     config_param :bind, :string, :default => '0.0.0.0'
     config_param :port, :integer, :default => 24230
-    config_param :unix_path, :integer, :default => nil
+    config_param :unix_path, :string, :default => nil
     #config_param :unix_mode  # TODO
     config_param :object, :string, :default => 'Engine'
 

@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class DetachProcessManager
     require 'singleton'
@@ -178,7 +177,6 @@ module Fluent
 
     def read_event_stream(r, &block)
       u = MessagePack::Unpacker.new(r)
-      cached_unpacker = $use_msgpack_5 ? nil : MessagePack::Unpacker.new
       begin
         #buf = ''
         #map = {}
@@ -193,14 +191,14 @@ module Fluent
         #  }
         #  unless map.empty?
         #    map.each_pair {|tag,ms|
-        #      es = MessagePackEventStream.new(ms, cached_unpacker)
+        #      es = MessagePackEventStream.new(ms)
         #      block.call(tag, es)
         #    }
         #    map.clear
         #  end
         #end
         u.each {|tag,ms|
-          es = MessagePackEventStream.new(ms, cached_unpacker)
+          es = MessagePackEventStream.new(ms)
           block.call(tag, es)
         }
       rescue EOFError
@@ -378,9 +376,12 @@ module Fluent
       def stop
         return if @finished
         @finished = true
-        @mutex.synchronize do
-          @cond.broadcast
-        end
+        # Creating new thread due to mutex can't lock in main thread during trap context
+        Thread.new {
+          @mutex.synchronize do
+            @cond.broadcast
+          end
+        }.run
       end
 
       def finished?

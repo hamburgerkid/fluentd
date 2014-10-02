@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -35,6 +33,14 @@ op.on('-p', '--port PORT', "debug_agent tcp port (default: #{port})", Integer) {
 op.on('-u', '--unix PATH', "use unix socket instead of tcp") {|b|
   unix = b
 }
+
+(class<<self;self;end).module_eval do
+  define_method(:usage) do |msg|
+    puts op.to_s
+    puts "error: #{msg}" if msg
+    exit 1
+  end
+end
 
 begin
   op.parse!(ARGV)
