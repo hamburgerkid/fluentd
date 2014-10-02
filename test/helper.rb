@@ -1,6 +1,18 @@
+# simplecov must be loaded before any of target code
+if ENV['SIMPLE_COV']
+  require 'simplecov'
+  unless SimpleCov.running
+    SimpleCov.start do
+      add_filter '/test/'
+      add_filter '/gems/'
+    end
+  end
+end
+
 require 'test/unit'
 require 'fileutils'
 require 'fluent/log'
+require 'fluent/test'
 require 'rr'
 
 unless defined?(Test::Unit::AssertionFailedError)
@@ -26,4 +38,4 @@ def ipv6_enabled?
   end
 end
 
-$log = Fluent::Log.new(STDOUT, Fluent::Log::LEVEL_WARN)
+$log = Fluent::Log.new(Fluent::Test::DummyLogDevice.new, Fluent::Log::LEVEL_WARN)

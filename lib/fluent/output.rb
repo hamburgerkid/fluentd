@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class OutputChain
     def initialize(array, tag, es, chain=NullOutputChain.instance)
@@ -61,12 +60,19 @@ module Fluent
     include PluginId
     include PluginLoggerMixin
 
+    attr_accessor :router
+
     def initialize
       super
     end
 
     def configure(conf)
       super
+
+      if label_name = conf['@label']
+        label = Engine.root_agent.find_label(label_name)
+        @router = label.event_router
+      end
     end
 
     def start
@@ -165,8 +171,8 @@ module Fluent
       @next_flush_time = 0
       @last_retry_time = 0
       @next_retry_time = 0
-      @error_history = []
-      @error_history.extend(MonitorMixin)
+      @num_errors = 0
+      @num_errors_lock = Mutex.new
       @secondary_limit = 8
       @emit_count = 0
     end
@@ -174,6 +180,7 @@ module Fluent
     config_param :buffer_type, :string, :default => 'memory'
     config_param :flush_interval, :time, :default => 60
     config_param :try_flush_interval, :float, :default => 1
+    config_param :disable_retry_limit, :bool, :default => false
     config_param :retry_limit, :integer, :default => 17
     config_param :retry_wait, :time, :default => 1.0
     config_param :max_retry_wait, :time, :default => nil
@@ -286,11 +293,11 @@ module Fluent
       end
 
       begin
-        retrying = !@error_history.empty?
+        retrying = !@num_errors.zero?
 
         if retrying
-          @error_history.synchronize do
-            if retrying = !@error_history.empty?  # re-check in synchronize
+          @num_errors_lock.synchronize do
+            if retrying = !@num_errors.zero? # re-check in synchronize
               if @next_retry_time >= time
                 # allow retrying for only one thread
                 return time + @try_flush_interval
@@ -298,13 +305,13 @@ module Fluent
               # assume next retry failes and
               # clear them if when it succeeds
               @last_retry_time = time
-              @error_history << time
+              @num_errors += 1
               @next_retry_time += calc_retry_wait
             end
           end
         end
 
-        if @secondary && @error_history.size > @retry_limit
+        if @secondary && !@disable_retry_limit && @num_errors > @retry_limit
           has_next = flush_secondary(@secondary)
         else
           has_next = @buffer.pop(self)
@@ -312,7 +319,7 @@ module Fluent
 
         # success
         if retrying
-          @error_history.clear
+          @num_errors = 0
           # Note: don't notify to other threads to prevent
           #       burst to recovered server
           $log.warn "retry succeeded.", :instance=>object_id
@@ -326,20 +333,20 @@ module Fluent
 
       rescue => e
         if retrying
-          error_count = @error_history.size
+          error_count = @num_errors
         else
           # first error
           error_count = 0
-          @error_history.synchronize do
-            if @error_history.empty?
+          @num_errors_lock.synchronize do
+            if @num_errors.zero?
               @last_retry_time = time
-              @error_history << time
+              @num_errors += 1
               @next_retry_time = time + calc_retry_wait
             end
           end
         end
 
-        if error_count < @retry_limit
+        if @disable_retry_limit || error_count < @retry_limit
           $log.warn "temporarily failed to flush the buffer.", :next_retry=>Time.at(@next_retry_time), :error_class=>e.class.to_s, :error=>e.to_s, :instance=>object_id
           $log.warn_backtrace e.backtrace
 
@@ -357,7 +364,7 @@ module Fluent
             $log.warn "secondary retry count exceededs limit."
             $log.warn_backtrace e.backtrace
             write_abort
-            @error_history.clear
+            @num_errors = 0
           end
 
         else
@@ -365,7 +372,7 @@ module Fluent
           $log.warn "retry count exceededs limit."
           $log.warn_backtrace e.backtrace
           write_abort
-          @error_history.clear
+          @num_errors = 0
         end
 
         return @next_retry_time
@@ -388,11 +395,11 @@ module Fluent
 
     def calc_retry_wait
       # TODO retry pattern
-      wait = if @error_history.size <= @retry_limit
-               @retry_wait * (2 ** (@error_history.size-1))
+      wait = if @disable_retry_limit || @num_errors <= @retry_limit
+               @retry_wait * (2 ** (@num_errors - 1))
              else
                # secondary retry
-               @retry_wait * (2 ** (@error_history.size-2-@retry_limit))
+               @retry_wait * (2 ** (@num_errors - 2 - @retry_limit))
              end
       retry_wait = wait + (rand * (wait / 4.0) - (wait / 8.0))
       @max_retry_wait ? [retry_wait, @max_retry_wait].min : retry_wait

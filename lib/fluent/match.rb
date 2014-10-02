@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class Match
     def initialize(pattern_str, output)
@@ -52,26 +51,21 @@ module Fluent
     end
   end
 
-
   class MatchPattern
     def self.create(str)
-      GlobMatchPattern.new(str)
+      if str == '**'
+        AllMatchPattern.new
+      else
+        GlobMatchPattern.new(str)
+      end
     end
-
-    #def match(str)
-    #end
   end
 
-  ## TODO
-  #class RegexMatchPattern < MatchPattern
-  #  def initialize(regex)
-  #    @regex = regex
-  #  end
-  #
-  #  def match(str)
-  #    @regex.match(str) != nil
-  #  end
-  #end
+  class AllMatchPattern < MatchPattern
+    def match(str)
+      true
+    end
+  end
 
   class GlobMatchPattern < MatchPattern
     def initialize(pat)
@@ -170,7 +164,6 @@ module Fluent
       @regex.match(str) != nil
     end
   end
-
 
   class OrMatchPattern < MatchPattern
     def initialize(patterns)

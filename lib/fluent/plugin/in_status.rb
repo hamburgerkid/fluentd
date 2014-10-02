@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class StatusInput < Input
     Plugin.register_input('status', self)
@@ -69,7 +68,7 @@ module Fluent
     def on_timer
       now = Engine.now
       Status.each {|record|
-        Engine.emit(@tag, now, record)
+        router.emit(@tag, now, record)
       }
     end
   end

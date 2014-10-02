@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,11 +13,13 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class PluginClass
     def initialize
       @input = {}
       @output = {}
+      @filter = {}
       @buffer = {}
     end
 
@@ -29,6 +29,10 @@ module Fluent
 
     def register_output(type, klass)
       register_impl('output', @output, type, klass)
+    end
+
+    def register_filter(type, klass)
+      register_impl('filter', @filter, type, klass)
     end
 
     def register_buffer(type, klass)
@@ -43,6 +47,10 @@ module Fluent
       new_impl('output', @output, type)
     end
 
+    def new_filter(type)
+      new_impl('filter', @filter, type)
+    end
+
     def new_buffer(type)
       new_impl('buffer', @buffer, type)
     end
@@ -50,7 +58,6 @@ module Fluent
     def load_plugins
       dir = File.join(File.dirname(__FILE__), "plugin")
       load_plugin_dir(dir)
-      load_gem_plugins
     end
 
     def load_plugin_dir(dir)
@@ -68,20 +75,6 @@ module Fluent
     end
 
     private
-    def load_gem_plugins
-      return unless defined? Gem
-      plugins = Gem.find_files('fluent_plugin')
-
-      plugins.each {|plugin|
-        begin
-          load plugin
-        rescue ::Exception => e
-          msg = "#{plugin.inspect}: #{e.message} (#{e.class})"
-          $log.warn "Error loading Fluent plugin #{msg}"
-        end
-      }
-    end
-
     def register_impl(name, map, type, klass)
       map[type] = klass
       $log.trace { "registered #{name} plugin '#{type}'" }
@@ -105,6 +98,8 @@ module Fluent
         path = "fluent/plugin/in_#{type}"
       when 'output'
         path = "fluent/plugin/out_#{type}"
+      when 'filter'
+        path = "fluent/plugin/filter_#{type}"
       when 'buffer'
         path = "fluent/plugin/buf_#{type}"
       else
@@ -123,33 +118,16 @@ module Fluent
       end
 
       # search gems
-      if defined?(::Gem::Specification) && ::Gem::Specification.respond_to?(:find_all)
-        specs = Gem::Specification.find_all {|spec|
-          spec.contains_requirable_file? path
-        }
+      specs = Gem::Specification.find_all { |spec|
+        spec.contains_requirable_file? path
+      }
 
-        # prefer newer version
-        specs = specs.sort_by {|spec| spec.version }
-        if spec = specs.last
-          spec.require_paths.each {|lib|
-            file = "#{spec.full_gem_path}/#{lib}/#{path}"
-            require file
-          }
-        end
-
-        # backward compatibility for rubygems < 1.8
-      elsif defined?(::Gem) && ::Gem.respond_to?(:searcher)
-        #files = Gem.find_files(path).sort
-        specs = Gem.searcher.find_all(path)
-
-        # prefer newer version
-        specs = specs.sort_by {|spec| spec.version }
-        specs.reverse_each {|spec|
-          files = Gem.searcher.matching_files(spec, path)
-          unless files.empty?
-            require files.first
-            break
-          end
+      # prefer newer version
+      specs = specs.sort_by { |spec| spec.version }
+      if spec = specs.last
+        spec.require_paths.each { |lib|
+          file = "#{spec.full_gem_path}/#{lib}/#{path}"
+          require file
         }
       end
     end
@@ -157,4 +135,3 @@ module Fluent
 
   Plugin = PluginClass.new
 end
-

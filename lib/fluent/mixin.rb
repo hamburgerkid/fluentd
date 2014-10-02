@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class TimeFormatter
     def initialize(format, localtime)
@@ -66,20 +65,6 @@ module Fluent
 
     def format_nocache(time)
       # will be overridden in initialize
-    end
-
-    def self.configure(conf)
-      if time_format = conf['time_format']
-        @time_format = time_format
-      end
-
-      if localtime = conf['localtime']
-        @localtime = true
-      elsif utc = conf['utc']
-        @localtime = false
-      end
-
-      @timef = new(@time_format, @localtime)
     end
   end
 
@@ -134,46 +119,33 @@ module Fluent
     def configure(conf)
       super
 
+      @include_time_key = false
+
       if s = conf['include_time_key']
-        b = Config.bool_value(s)
-        if s.empty?
-          b = true
-        elsif b == nil
-          raise ConfigError, "Invalid boolean expression '#{s}' for include_time_key parameter"
-        end
-        @include_time_key = b
+        include_time_key = Config.bool_value(s)
+        raise ConfigError, "Invalid boolean expression '#{s}' for include_time_key parameter" if include_time_key.nil?
+
+        @include_time_key = include_time_key
       end
 
       if @include_time_key
-        if time_key = conf['time_key']
-          @time_key = time_key
-        end
-        unless @time_key
-          @time_key = 'time'
-        end
+        @time_key     = conf['time_key'] || 'time'
+        @time_format  = conf['time_format']
 
-        if time_format = conf['time_format']
-          @time_format = time_format
-        end
-
-        if localtime = conf['localtime']
+        if    conf['localtime']
           @localtime = true
-        elsif utc = conf['utc']
+        elsif conf['utc']
           @localtime = false
         end
 
         @timef = TimeFormatter.new(@time_format, @localtime)
-
-      else
-        @include_time_key = false
       end
     end
 
     def filter_record(tag, time, record)
       super
-      if @include_time_key
-        record[@time_key] = @timef.format(time)
-      end
+
+      record[@time_key] = @timef.format(time) if @include_time_key
     end
   end
 
@@ -185,34 +157,22 @@ module Fluent
     def configure(conf)
       super
 
+      @include_tag_key = false
+
       if s = conf['include_tag_key']
-        b = Config.bool_value(s)
-        if s.empty?
-          b = true
-        elsif b == nil
-          raise ConfigError, "Invalid boolean expression '#{s}' for include_tag_key parameter"
-        end
-        @include_tag_key = b
+        include_tag_key = Config.bool_value(s)
+        raise ConfigError, "Invalid boolean expression '#{s}' for include_tag_key parameter" if include_tag_key.nil?
+
+        @include_tag_key = include_tag_key
       end
 
-      if @include_tag_key
-        if tag_key = conf['tag_key']
-          @tag_key = tag_key
-        end
-        unless @tag_key
-          @tag_key = 'tag'
-        end
-
-      else
-        @include_tag_key = false
-      end
+      @tag_key = conf['tag_key'] || 'tag' if @include_tag_key
     end
 
     def filter_record(tag, time, record)
       super
-      if @include_tag_key
-        record[@tag_key] = tag
-      end
+
+      record[@tag_key] = tag if @include_tag_key
     end
   end
 end

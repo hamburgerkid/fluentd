@@ -6,7 +6,7 @@ Gem::Specification.new do |gem|
 
   gem.authors       = ["Sadayuki Furuhashi"]
   gem.email         = ["frsyuki@gmail.com"]
-  gem.description   = %q{Fluentd is an event collector system. It is a generalized version of syslogd, which handles JSON objects for its log messages}
+  gem.description   = %q{Fluentd is an open source data collector designed to scale and simplify log management. It can collect, process and ship many kinds of data in near real-time.}
   gem.summary       = %q{Fluentd event collector}
   gem.homepage      = "http://fluentd.org/"
 
@@ -18,16 +18,19 @@ Gem::Specification.new do |gem|
 
   gem.required_ruby_version = '>= 1.9.2'
 
-  gem.add_runtime_dependency("msgpack", [">= 0.4.4", "!= 0.5.0", "!= 0.5.1", "!= 0.5.2", "!= 0.5.3", "< 0.6.0"])
+  gem.add_runtime_dependency("msgpack", [">= 0.5.4", "< 0.6.0"])
   gem.add_runtime_dependency("json", [">= 1.4.3"])
   gem.add_runtime_dependency("yajl-ruby", ["~> 1.0"])
-  gem.add_runtime_dependency("cool.io", [">= 1.1.1", "!= 1.2.0", "< 2.0.0"])
+  gem.add_runtime_dependency("cool.io", [">= 1.2.2", "< 2.0.0"])
   gem.add_runtime_dependency("http_parser.rb", [">= 0.5.1", "< 0.7.0"])
   gem.add_runtime_dependency("sigdump", ["~> 0.2.2"])
 
   gem.add_development_dependency("rake", [">= 0.9.2"])
   gem.add_development_dependency("flexmock")
   gem.add_development_dependency("parallel_tests", [">= 0.15.3"])
+  gem.add_development_dependency("rspec", ["~> 3.0.0"])
+  gem.add_development_dependency("simplecov", ["~> 0.6.4"])
   gem.add_development_dependency("rr", [">= 1.0.0"])
   gem.add_development_dependency("timecop", [">= 0.3.0"])
+  gem.add_development_dependency("test-unit", ["~> 3.0"])
 end

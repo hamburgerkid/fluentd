@@ -1,7 +1,5 @@
 #
-# Fluent
-#
-# Copyright (C) 2011 FURUHASHI Sadayuki
+# Fluentd
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -15,6 +13,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 #
+
 module Fluent
   class HttpInput < Input
     Plugin.register_input('http', self)
@@ -35,19 +34,26 @@ module Fluent
     config_param :keepalive_timeout, :time, :default => 10   # TODO default
     config_param :backlog, :integer, :default => nil
     config_param :add_http_headers, :bool, :default => false
+    config_param :format, :string, :default => 'default'
+    config_param :blocking_timeout, :time, :default => 0.5
 
     def configure(conf)
       super
+
+      m = if @format == 'default'
+            method(:parse_params_default)
+          else
+            parser = TextParser.new
+            parser.configure(conf)
+            @parser = parser
+            method(:parse_params_with_parser)
+          end
+      (class << self; self; end).module_eval do
+        define_method(:parse_params, m)
+      end
     end
 
     class KeepaliveManager < Coolio::TimerWatcher
-      class TimerValue
-        def initialize
-          @value = 0
-        end
-        attr_accessor :value
-      end
-
       def initialize(timeout)
         super(1, true)
         @cons = {}
@@ -79,7 +85,7 @@ module Fluent
         super
         @km = KeepaliveManager.new(@keepalive_timeout)
         #@lsock = Coolio::TCPServer.new(@bind, @port, Handler, @km, method(:on_request), @body_size_limit)
-        @lsock = Coolio::TCPServer.new(lsock, nil, Handler, @km, method(:on_request), @body_size_limit, log)
+        @lsock = Coolio::TCPServer.new(lsock, nil, Handler, @km, method(:on_request), @body_size_limit, @format, log)
         @lsock.listen(@backlog) unless @backlog.nil?
 
         @loop = Coolio::Loop.new
@@ -98,7 +104,7 @@ module Fluent
     end
 
     def run
-      @loop.run
+      @loop.run(@blocking_timeout)
     rescue
       log.error "unexpected error", :error=>$!.to_s
       log.error_backtrace
@@ -108,22 +114,13 @@ module Fluent
       begin
         path = path_info[1..-1]  # remove /
         tag = path.split('/').join('.')
-
-        if msgpack = params['msgpack']
-          record = MessagePack.unpack(msgpack)
-
-        elsif js = params['json']
-          record = JSON.parse(js)
-
-        else
-          raise "'json' or 'msgpack' parameter is required"
-        end
+        record_time, record = parse_params(params)
 
         # Skip nil record
         if record.nil?
           return ["200 OK", {'Content-type'=>'text/plain'}, ""]
         end
-        
+
         if @add_http_headers
           params.each_pair { |k,v|
             if k.start_with?("HTTP_")
@@ -132,19 +129,29 @@ module Fluent
           }
         end
 
-        time = params['time']
-        time = time.to_i
-        if time == 0
-          time = Engine.now
-        end
-
+        time = if param_time = params['time']
+                 param_time = param_time.to_i
+                 param_time.zero? ? Engine.now : param_time
+               else
+                 record_time.nil? ? Engine.now : record_time
+               end
       rescue
         return ["400 Bad Request", {'Content-type'=>'text/plain'}, "400 Bad Request\n#{$!}\n"]
       end
 
       # TODO server error
       begin
-        Engine.emit(tag, time, record)
+        # Support batched requests
+        if record.is_a?(Array)           
+          mes = MultiEventStream.new
+          record.each do |single_record|
+            single_time = single_record.delete("time") || time 
+            mes.add(single_time, single_record)
+          end
+          router.emit_stream(tag, mes)
+	else
+          router.emit(tag, time, record)
+        end
       rescue
         return ["500 Internal Server Error", {'Content-type'=>'text/plain'}, "500 Internal Server Error\n#{$!}\n"]
       end
@@ -152,14 +159,39 @@ module Fluent
       return ["200 OK", {'Content-type'=>'text/plain'}, ""]
     end
 
+    private
+
+    def parse_params_default(params)
+      record = if msgpack = params['msgpack']
+                 MessagePack.unpack(msgpack)
+               elsif js = params['json']
+                 JSON.parse(js)
+               else
+                 raise "'json' or 'msgpack' parameter is required"
+               end
+      return nil, record
+    end
+
+    EVENT_RECORD_PARAMETER = '_event_record'
+
+    def parse_params_with_parser(params)
+      if content = params[EVENT_RECORD_PARAMETER]
+        time, record = @parser.parse(content)
+        raise "Received event is not #{@format}: #{content}" if record.nil?
+        return time, record
+      else
+        raise "'#{EVENT_RECORD_PARAMETER}' parameter is required"
+      end
+    end
+
     class Handler < Coolio::Socket
-      def initialize(io, km, callback, body_size_limit, log)
+      def initialize(io, km, callback, body_size_limit, format, log)
         super(io)
         @km = km
         @callback = callback
         @body_size_limit = body_size_limit
-        @content_type = ""
         @next_close = false
+        @format = format
         @log = log
 
         @idle = 0
@@ -202,6 +234,7 @@ module Fluent
           @keep_alive = false
         end
         @env = {}
+        @content_type = ""
         headers.each_pair {|k,v|
           @env["HTTP_#{k.gsub('-','_').upcase}"] = v
           case k
@@ -250,7 +283,9 @@ module Fluent
         uri = URI.parse(@parser.request_url)
         params = WEBrick::HTTPUtils.parse_query(uri.query)
 
-        if @content_type =~ /^application\/x-www-form-urlencoded/
+        if @format != 'default'
+          params[EVENT_RECORD_PARAMETER] = @body
+        elsif @content_type =~ /^application\/x-www-form-urlencoded/
           params.update WEBrick::HTTPUtils.parse_query(@body)
         elsif @content_type =~ /^multipart\/form-data; boundary=(.+)/
           boundary = WEBrick::HTTPUtils.dequote($1)
